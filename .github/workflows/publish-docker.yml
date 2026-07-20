@@ -6,6 +6,8 @@ on:
       - main
     tags:
       - 'v*.*.*'
+  schedule:
+    - cron: '17 2 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -31,6 +33,37 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install renderer dependencies
+        run: npm ci
+
+      - name: Render Dockerfile
+        run: npm run render:dockerfile
+
+      - name: Read generated plugin manifest
+        id: plugins
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          manifest_path=".generated/plugins-manifest.json"
+          sha256="$(jq -er '.sha256 | select(test("^[a-f0-9]{64}$"))' "${manifest_path}")"
+          plugin_count="$(jq -er '.pluginCount | select(type == "number" and . > 0)' "${manifest_path}")"
+          source="$(jq -er '.source | select(type == "string" and length > 0)' "${manifest_path}")"
+
+          {
+            echo "sha256=${sha256}"
+            echo "plugin_count=${plugin_count}"
+            echo "source=${source}"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "::notice title=Plugin manifest::SHA-256 ${sha256}; plugins ${plugin_count}"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
@@ -41,8 +74,55 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Decide whether to publish
+        id: publish-check
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_SHA256: ${{ steps.plugins.outputs.sha256 }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+
+          should_build="true"
+          reason="${EVENT_NAME} events always publish"
+
+          if [[ "${EVENT_NAME}" == "schedule" ]]; then
+            labels=""
+            if labels="$(docker buildx imagetools inspect \
+              "${IMAGE}:latest" \
+              --format '{{json (index .Image "linux/amd64").config.Labels}}')"; then
+              if ! current_sha256="$(jq -er \
+                'if type == "object" then .["io.awesome-answer.plugins.manifest-sha256"] // "" else "" end' \
+                <<< "${labels}")"; then
+                reason="latest image labels could not be parsed"
+                echo "::warning title=Invalid image metadata::Unable to parse labels from ${IMAGE}:latest; the scheduled build will run."
+              elif [[ -z "${current_sha256}" ]]; then
+                reason="latest image has no plugin manifest label"
+              elif [[ ! "${current_sha256}" =~ ^[a-f0-9]{64}$ ]]; then
+                reason="latest image has an invalid plugin manifest label"
+              elif [[ "${current_sha256}" == "${EXPECTED_SHA256}" ]]; then
+                should_build="false"
+                reason="latest image already uses plugin manifest ${EXPECTED_SHA256}"
+              else
+                reason="plugin manifest changed to ${EXPECTED_SHA256}"
+              fi
+            else
+              reason="latest image is unavailable"
+              echo "::warning title=Image inspection failed::Unable to inspect ${IMAGE}:latest; the scheduled build will run."
+            fi
+          fi
+
+          {
+            echo "should_build=${should_build}"
+            echo "reason=${reason}"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "::notice title=Publish decision::${reason}"
+
       - name: Extract Docker metadata
         id: meta
+        if: steps.publish-check.outputs.should_build == 'true'
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -57,15 +137,19 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+            io.awesome-answer.plugins.manifest-sha256=${{ steps.plugins.outputs.sha256 }}
+            io.awesome-answer.plugins.count=${{ steps.plugins.outputs.plugin_count }}
+            io.awesome-answer.plugins.source=${{ steps.plugins.outputs.source }}
         env:
           DOCKER_METADATA_SHORT_SHA_LENGTH: 12
 
       - name: Build and push Docker image
         id: build
+        if: steps.publish-check.outputs.should_build == 'true'
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          file: ./Dockerfile
+          file: ./.generated/Dockerfile
           platforms: linux/amd64
           pull: true
           push: true
@@ -75,6 +159,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=awesome-answer-linux-amd64
 
       - name: Inspect published image digest
+        if: steps.publish-check.outputs.should_build == 'true'
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DIGEST: ${{ steps.build.outputs.digest }}

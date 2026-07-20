@@ -1,0 +1,36 @@
+{
+  "en_US": [
+    {
+      "name": "S3 Storage",
+      "desc": "Store uploaded files in S3.",
+      "link": "https://github.com/apache/answer-plugins/tree/main/storage-s3"
+    },
+    {
+      "name": "Basic Connector",
+      "desc": "Use basic authentication.",
+      "link": "https://github.com/apache/answer-plugins/tree/main/connector-basic"
+    },
+    {
+      "name": "Redis Cache",
+      "desc": "Use Redis as the cache.",
+      "link": "https://github.com/apache/answer-plugins/tree/main/cache-redis"
+    }
+  ],
+  "zh_CN": [
+    {
+      "name": "Redis Cache",
+      "desc": "Use Redis as the cache.",
+      "link": "https://github.com/apache/answer-plugins/tree/main/cache-redis"
+    },
+    {
+      "name": "S3 Storage",
+      "desc": "Store uploaded files in S3.",
+      "link": "https://github.com/apache/answer-plugins/tree/main/storage-s3"
+    },
+    {
+      "name": "Basic Connector",
+      "desc": "Use basic authentication.",
+      "link": "https://github.com/apache/answer-plugins/tree/main/connector-basic"
+    }
+  ]
+}

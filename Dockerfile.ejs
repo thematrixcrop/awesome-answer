@@ -1,4 +1,4 @@
-FROM apache/answer AS answer-builder
+FROM apache/answer:latest AS answer-builder
 
 FROM golang:1.24-alpine AS golang-builder
 
@@ -8,14 +8,19 @@ RUN apk --no-cache add \
     build-base git bash nodejs npm && \
     npm install -g pnpm@9.7.0
 
-RUN answer build \
-    --with github.com/apache/answer-plugins/connector-basic \
-    --with github.com/apache/answer-plugins/storage-s3 \
-    --with github.com/apache/answer-plugins/search-elasticsearch \
-    --output /usr/bin/new_answer
+ARG PLUGINS_MANIFEST_SHA256="<%= manifest.sha256 %>"
+RUN echo "Building plugins from manifest ${PLUGINS_MANIFEST_SHA256}" && \
+    answer build \
+<% for (const plugin of manifest.plugins) { -%>
+        --with <%= plugin %> \
+<% } -%>
+        --output /usr/bin/new_answer
 
 FROM alpine
-LABEL org.opencontainers.image.authors="awesome-answer@thematrixcrop.com"
+LABEL org.opencontainers.image.authors="awesome-answer@thematrixcrop.com" \
+      io.awesome-answer.plugins.manifest-sha256="<%= manifest.sha256 %>" \
+      io.awesome-answer.plugins.count="<%= manifest.pluginCount %>" \
+      io.awesome-answer.plugins.source="<%= manifest.source %>"
 
 ARG TIMEZONE
 ENV TIMEZONE=${TIMEZONE:-"Asia/Shanghai"}
