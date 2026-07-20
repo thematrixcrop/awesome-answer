@@ -96,7 +96,7 @@ jobs:
             labels=""
             if labels="$(docker buildx imagetools inspect \
               "${IMAGE}:latest" \
-              --format '{{json (index .Image "linux/amd64").config.Labels}}')"; then
+              --format '{{json .Image.Config.Labels}}')"; then
               if ! current_sha256="$(jq -er \
                 'if type == "object" then .["io.awesome-answer.plugins.manifest-sha256"] // "" else "" end' \
                 <<< "${labels}")"; then
