@@ -20,6 +20,36 @@ export const DEFAULT_BLACKLIST_PATH = path.join(
 const GITHUB_PATH_PREFIX = "/apache/answer-plugins/tree/main/";
 const PLUGIN_MODULE_PREFIX = "github.com/apache/answer-plugins/";
 const PLUGIN_SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const ANSWER_RELEASE_TAG_PATTERN =
+  /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+
+export function normalizeAnswerTag(answerTag) {
+  if (typeof answerTag !== "string" || answerTag.length === 0) {
+    throw new TypeError(
+      'The "answerTag" option is required and must match vMAJOR.MINOR.PATCH.',
+    );
+  }
+
+  if (!ANSWER_RELEASE_TAG_PATTERN.test(answerTag)) {
+    throw new Error(
+      `Invalid Answer release tag "${answerTag}": expected a stable vMAJOR.MINOR.PATCH tag.`,
+    );
+  }
+
+  const answerDockerTag = answerTag.slice(1);
+  if (!ANSWER_RELEASE_TAG_PATTERN.test(`v${answerDockerTag}`)) {
+    throw new Error(
+      `Unable to derive a Docker Hub tag from Answer release tag "${answerTag}".`,
+    );
+  }
+  if (answerDockerTag.length > 128) {
+    throw new Error(
+      `The Docker Hub tag derived from Answer release tag "${answerTag}" is too long.`,
+    );
+  }
+
+  return { answerTag, answerDockerTag };
+}
 
 function writeLog(level, event, details = {}) {
   const record = {
@@ -353,6 +383,7 @@ async function readBlacklist({ blacklistFile, log }) {
 }
 
 export async function renderDockerfile({
+  answerTag,
   descriptorFile,
   blacklistFile = DEFAULT_BLACKLIST_PATH,
   outputDirectory = DEFAULT_OUTPUT_DIRECTORY,
@@ -360,6 +391,9 @@ export async function renderDockerfile({
   fetchImplementation = globalThis.fetch,
   log = logger,
 } = {}) {
+  const normalizedAnswer = normalizeAnswerTag(answerTag);
+  log.info("answer.release.validated", normalizedAnswer);
+
   if (!descriptorFile && typeof fetchImplementation !== "function") {
     throw new Error("This Node.js version does not provide the Fetch API.");
   }
@@ -386,7 +420,11 @@ export async function renderDockerfile({
   const template = await readFile(resolvedTemplatePath, "utf8");
   const renderedDockerfile = ejs.render(
     template,
-    { manifest: renderManifest },
+    {
+      manifest: renderManifest,
+      answerTag: normalizedAnswer.answerTag,
+      answerDockerTag: normalizedAnswer.answerDockerTag,
+    },
     { filename: resolvedTemplatePath },
   );
 
@@ -405,6 +443,8 @@ export async function renderDockerfile({
   log.info("render.completed", {
     dockerfilePath,
     manifestPath,
+    answerTag: normalizedAnswer.answerTag,
+    answerDockerTag: normalizedAnswer.answerDockerTag,
     pluginCount: manifest.pluginCount,
     sha256: manifest.sha256,
     blacklistSha256: blacklist.sha256,
@@ -415,6 +455,8 @@ export async function renderDockerfile({
     dockerfilePath,
     manifestPath,
     manifest,
+    answerTag: normalizedAnswer.answerTag,
+    answerDockerTag: normalizedAnswer.answerDockerTag,
     blacklistSha256: blacklist.sha256,
     blacklistPlugins: blacklist.plugins,
     renderedDockerfile,
@@ -423,25 +465,35 @@ export async function renderDockerfile({
 
 function parseArguments(argumentsToParse) {
   const options = {};
+  const optionNames = {
+    "--answer-tag": "answerTag",
+    "--descriptor-file": "descriptorFile",
+    "--blacklist-file": "blacklistFile",
+  };
 
   for (let index = 0; index < argumentsToParse.length; index += 1) {
     const argument = argumentsToParse[index];
-    if (argument !== "--descriptor-file" && argument !== "--blacklist-file") {
+    const optionName = optionNames[argument];
+    if (!Object.hasOwn(optionNames, argument)) {
       throw new Error(`Unknown argument: ${argument}`);
     }
 
-    const filePath = argumentsToParse[index + 1];
-    if (!filePath || filePath.startsWith("--")) {
-      throw new Error(`${argument} requires a file path.`);
+    const value = argumentsToParse[index + 1];
+    if (!value || value.startsWith("--")) {
+      const valueDescription =
+        argument === "--answer-tag" ? "an Answer release tag" : "a file path";
+      throw new Error(`${argument} requires ${valueDescription}.`);
     }
-    const optionName =
-      argument === "--descriptor-file" ? "descriptorFile" : "blacklistFile";
     if (Object.hasOwn(options, optionName)) {
       throw new Error(`${argument} can only be specified once.`);
     }
 
-    options[optionName] = filePath;
+    options[optionName] = value;
     index += 1;
+  }
+
+  if (!Object.hasOwn(options, "answerTag")) {
+    throw new Error("--answer-tag is required.");
   }
 
   return options;

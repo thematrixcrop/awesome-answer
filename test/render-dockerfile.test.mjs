@@ -10,6 +10,7 @@ import {
   DESCRIPTOR_SOURCE,
   createPluginBlacklist,
   createPluginManifest,
+  normalizeAnswerTag,
   renderDockerfile,
 } from "../scripts/render-dockerfile.mjs";
 
@@ -52,17 +53,21 @@ test("renders stable Dockerfile and manifest output", async (testContext) => {
   const secondOutput = await createTemporaryDirectory(testContext);
 
   const first = await renderDockerfile({
+    answerTag: "v2.0.1",
     descriptorFile: FIXTURE_PATH,
     outputDirectory: firstOutput,
     log: silentLog,
   });
   const second = await renderDockerfile({
+    answerTag: "v2.0.1",
     descriptorFile: FIXTURE_PATH,
     outputDirectory: secondOutput,
     log: silentLog,
   });
 
   assert.equal(first.renderedDockerfile, second.renderedDockerfile);
+  assert.equal(first.answerTag, "v2.0.1");
+  assert.equal(first.answerDockerTag, "2.0.1");
   assert.equal(
     await readFile(first.manifestPath, "utf8"),
     await readFile(second.manifestPath, "utf8"),
@@ -202,6 +207,7 @@ test("rejects malformed descriptors and unsupported plugin links", () => {
 test("renders every plugin argument and all manifest labels", async (testContext) => {
   const outputDirectory = await createTemporaryDirectory(testContext);
   const result = await renderDockerfile({
+    answerTag: "v2.0.1",
     descriptorFile: FIXTURE_PATH,
     outputDirectory,
     log: silentLog,
@@ -224,7 +230,7 @@ test("renders every plugin argument and all manifest labels", async (testContext
     );
   }
 
-  assert.ok(dockerfile.includes("FROM apache/answer:latest AS answer-builder"));
+  assert.ok(dockerfile.includes("FROM apache/answer:2.0.1 AS answer-builder"));
   assert.ok(
     dockerfile.includes(
       `ARG PLUGINS_MANIFEST_SHA256="${result.manifest.sha256}"`,
@@ -276,6 +282,7 @@ test("uses the repository blacklist when rendering a descriptor", async (testCon
   );
 
   const result = await renderDockerfile({
+    answerTag: "v2.0.1",
     descriptorFile: descriptorPath,
     outputDirectory,
     log: silentLog,
@@ -286,4 +293,39 @@ test("uses the repository blacklist when rendering a descriptor", async (testCon
   ]);
   assert.equal(result.manifest.pluginCount, 1);
   assert.ok(!result.renderedDockerfile.includes("user-center-slack"));
+});
+
+test("requires a stable Answer release tag", async (testContext) => {
+  const outputDirectory = await createTemporaryDirectory(testContext);
+
+  await assert.rejects(
+    () =>
+      renderDockerfile({
+        descriptorFile: FIXTURE_PATH,
+        outputDirectory,
+        log: silentLog,
+      }),
+    /answerTag.*required/i,
+  );
+
+  for (const answerTag of [
+    "2.0.1",
+    "v2.0",
+    "v2.0.1-rc.1",
+    "v2.0.1+build.1",
+    "v02.0.1",
+  ]) {
+    assert.throws(
+      () => normalizeAnswerTag(answerTag),
+      /stable vMAJOR\.MINOR\.PATCH/i,
+      answerTag,
+    );
+  }
+});
+
+test("normalizes only the v prefix for a stable Answer release", async () => {
+  assert.deepEqual(normalizeAnswerTag("v2.0.1"), {
+    answerTag: "v2.0.1",
+    answerDockerTag: "2.0.1",
+  });
 });

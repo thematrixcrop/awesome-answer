@@ -33,6 +33,80 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Resolve upstream Answer release
+        id: answer
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          release_json="$(curl \
+            --fail-with-body \
+            --location \
+            --retry 3 \
+            --retry-all-errors \
+            --silent \
+            --show-error \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --header "User-Agent: awesome-answer-publisher" \
+            "https://api.github.com/repos/apache/answer/releases/latest")"
+
+          if ! answer_tag="$(jq -er \
+            '.tag_name | select(type == "string" and length > 0)' \
+            <<< "${release_json}")"; then
+            echo "::error title=Invalid upstream release::The latest Apache Answer release has no usable tag_name."
+            exit 1
+          fi
+
+          if jq -e '(.draft == true) or (.prerelease == true)' <<< "${release_json}" >/dev/null; then
+            echo "::error title=Unsupported upstream release::The latest Apache Answer release is a draft or pre-release."
+            exit 1
+          fi
+
+          if [[ ! "${answer_tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error title=Invalid upstream release tag::Expected vMAJOR.MINOR.PATCH, received ${answer_tag}."
+            exit 1
+          fi
+
+          answer_docker_tag="${answer_tag#v}"
+          if [[ ! "${answer_docker_tag}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error title=Invalid Docker Hub tag::Unable to derive a stable Docker Hub tag from ${answer_tag}."
+            exit 1
+          fi
+          if (( ${#answer_docker_tag} > 128 )); then
+            echo "::error title=Invalid Docker Hub tag::The derived tag from ${answer_tag} exceeds Docker's 128-character limit."
+            exit 1
+          fi
+
+          build_date="$(date -u +%Y%m%d)"
+          if [[ ! "${build_date}" =~ ^[0-9]{8}$ ]]; then
+            echo "::error title=Invalid build date::UTC build date must be YYYYMMDD, received ${build_date}."
+            exit 1
+          fi
+
+          image_tag="${answer_tag}_${build_date}"
+          if [[ ! "${image_tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)_[0-9]{8}$ ]]; then
+            echo "::error title=Invalid image tag::Unable to construct a valid dated image tag from ${answer_tag}."
+            exit 1
+          fi
+          if (( ${#image_tag} > 128 )); then
+            echo "::error title=Invalid image tag::The dated tag ${image_tag} exceeds Docker's 128-character limit."
+            exit 1
+          fi
+
+          {
+            echo "answer_tag=${answer_tag}"
+            echo "answer_docker_tag=${answer_docker_tag}"
+            echo "build_date=${build_date}"
+            echo "image_tag=${image_tag}"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "::notice title=Upstream Answer release::${answer_tag} (Docker Hub ${answer_docker_tag})"
+          echo "::notice title=Dated image tag::${image_tag}"
+
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -43,7 +117,7 @@ jobs:
         run: npm ci
 
       - name: Render Dockerfile
-        run: npm run render:dockerfile
+        run: npm run render:dockerfile -- --answer-tag "${{ steps.answer.outputs.answer_tag }}"
 
       - name: Read generated plugin manifest
         id: plugins
@@ -85,6 +159,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EXPECTED_SHA256: ${{ steps.plugins.outputs.sha256 }}
           EXPECTED_BLACKLIST_SHA256: ${{ steps.plugins.outputs.blacklist_sha256 }}
+          EXPECTED_ANSWER_TAG: ${{ steps.answer.outputs.answer_tag }}
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
           set -euo pipefail
@@ -94,39 +169,45 @@ jobs:
 
           if [[ "${EVENT_NAME}" == "schedule" ]]; then
             labels=""
-            if labels="$(docker buildx imagetools inspect \
+            if ! labels="$(docker buildx imagetools inspect \
               "${IMAGE}:latest" \
               --format '{{json .Image.Config.Labels}}')"; then
-              if ! current_sha256="$(jq -er \
-                'if type == "object" then .["io.awesome-answer.plugins.manifest-sha256"] // "" else "" end' \
-                <<< "${labels}")"; then
-                reason="latest image labels could not be parsed"
-                echo "::warning title=Invalid image metadata::Unable to parse labels from ${IMAGE}:latest; the scheduled build will run."
-              elif [[ -z "${current_sha256}" ]]; then
+              reason="latest image is unavailable"
+              echo "::warning title=Image inspection failed::Unable to inspect ${IMAGE}:latest; the scheduled build will run."
+            elif ! jq -e 'type == "object"' <<< "${labels}" >/dev/null; then
+              reason="latest image labels could not be parsed"
+              echo "::warning title=Invalid image metadata::Unable to parse labels from ${IMAGE}:latest; the scheduled build will run."
+            else
+              current_sha256="$(jq -r \
+                '.["io.awesome-answer.plugins.manifest-sha256"] // ""' \
+                <<< "${labels}")"
+              current_blacklist_sha256="$(jq -r \
+                '.["io.awesome-answer.plugins.blacklist-sha256"] // ""' \
+                <<< "${labels}")"
+              current_answer_tag="$(jq -r \
+                '.["io.awesome-answer.upstream.answer-tag"] // ""' \
+                <<< "${labels}")"
+
+              if [[ -z "${current_sha256}" ]]; then
                 reason="latest image has no plugin manifest label"
               elif [[ ! "${current_sha256}" =~ ^[a-f0-9]{64}$ ]]; then
                 reason="latest image has an invalid plugin manifest label"
+              elif [[ -z "${current_blacklist_sha256}" ]]; then
+                reason="latest image has no plugin blacklist label"
+              elif [[ ! "${current_blacklist_sha256}" =~ ^[a-f0-9]{64}$ ]]; then
+                reason="latest image has an invalid plugin blacklist label"
+              elif [[ -z "${current_answer_tag}" ]]; then
+                reason="latest image has no upstream Answer tag label"
+              elif [[ ! "${current_answer_tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+                reason="latest image has an invalid upstream Answer tag label"
+              elif [[ "${current_sha256}" == "${EXPECTED_SHA256}" && \
+                "${current_blacklist_sha256}" == "${EXPECTED_BLACKLIST_SHA256}" && \
+                "${current_answer_tag}" == "${EXPECTED_ANSWER_TAG}" ]]; then
+                should_build="false"
+                reason="latest image already uses the current plugin manifest, blacklist, and upstream Answer version"
               else
-                if ! current_blacklist_sha256="$(jq -er \
-                  'if type == "object" then .["io.awesome-answer.plugins.blacklist-sha256"] // "" else "" end' \
-                  <<< "${labels}")"; then
-                  reason="latest image labels could not be parsed"
-                  echo "::warning title=Invalid image metadata::Unable to read blacklist metadata from ${IMAGE}:latest; the scheduled build will run."
-                elif [[ -z "${current_blacklist_sha256}" ]]; then
-                  reason="latest image has no plugin blacklist label"
-                elif [[ ! "${current_blacklist_sha256}" =~ ^[a-f0-9]{64}$ ]]; then
-                  reason="latest image has an invalid plugin blacklist label"
-                elif [[ "${current_sha256}" == "${EXPECTED_SHA256}" && \
-                  "${current_blacklist_sha256}" == "${EXPECTED_BLACKLIST_SHA256}" ]]; then
-                  should_build="false"
-                  reason="latest image already uses the current plugin manifest and blacklist"
-                else
-                  reason="plugin manifest or blacklist changed"
-                fi
+                reason="plugin manifest, blacklist, or upstream Answer version changed"
               fi
-            else
-              reason="latest image is unavailable"
-              echo "::warning title=Image inspection failed::Unable to inspect ${IMAGE}:latest; the scheduled build will run."
             fi
           fi
 
@@ -145,21 +226,17 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: latest=false
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
-            type=sha,format=short
+            type=raw,value=${{ steps.answer.outputs.image_tag }}
+            type=raw,value=latest
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.answer.outputs.image_tag }}
+            io.awesome-answer.upstream.answer-tag=${{ steps.answer.outputs.answer_tag }}
             io.awesome-answer.plugins.manifest-sha256=${{ steps.plugins.outputs.sha256 }}
             io.awesome-answer.plugins.blacklist-sha256=${{ steps.plugins.outputs.blacklist_sha256 }}
             io.awesome-answer.plugins.count=${{ steps.plugins.outputs.plugin_count }}
             io.awesome-answer.plugins.source=${{ steps.plugins.outputs.source }}
-        env:
-          DOCKER_METADATA_SHORT_SHA_LENGTH: 12
 
       - name: Build and push Docker image
         id: build
