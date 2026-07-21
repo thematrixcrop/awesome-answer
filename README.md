@@ -16,33 +16,37 @@ For upstream licensing and trademark information, see the [Apache Answer reposit
 
 ## Current Support Snapshot
 
-Snapshot date: **2026-07-20 UTC**.
+<!-- BEGIN AUTO-GENERATED: support-snapshot -->
+Snapshot date: **2026-07-21 UTC**.
 
 | Item | Current value |
 | --- | --- |
-| Stable upstream release | `v2.0.1` |
-| Upstream Docker base image | `apache/answer:2.0.1` |
+| Stable upstream release | `v2.0.2` |
+| Upstream Docker base image | `apache/answer:2.0.2` |
 | Community image | `ghcr.io/thematrixcrop/awesome-answer` |
-| Recommended pinned tag | `v2.0.1_20260720` |
+| Recommended pinned tag | `v2.0.2_20260721` |
 | Convenience tag | `latest` |
 | Build platform | `linux/amd64` |
 | Included plugins | 29 |
 | Temporarily blocked plugins | 2 |
 | Plugin descriptor SHA-256 | `1c58a91ce915beb08b929225434eaedd307342843f711670c6262b44a9d5010e` |
-| Blacklist SHA-256 | `cd5da62a7952a1aa540520d067fc5464e41662f1da69a305b33d95278df8e0e7` |
+| Blacklist SHA-256 | `f3596ca650095fd3c566313b09be0142687028f4b6f4db2c82f9786a0b1466b5` |
+<!-- END AUTO-GENERATED: support-snapshot -->
 
-The current stable release is `v2.0.1`. Docker Hub also exposes `2.0.2-RC1`, `2.0.2-RC2`, and `2.0.2-RC3`; this repository workflow intentionally does not build pre-release versions.
+<!-- BEGIN AUTO-GENERATED: release-policy -->
+The current stable release is `v2.0.2`. This repository workflow intentionally does not build pre-release versions.
 
-- [Apache Answer v2.0.1 release](https://github.com/apache/answer/releases/tag/v2.0.1)
+- [Apache Answer v2.0.2 release](https://github.com/apache/answer/releases/tag/v2.0.2)
 - [Apache Answer download page](https://answer.apache.org/download/)
 - [Apache Answer Docker tags](https://hub.docker.com/r/apache/answer/tags)
 
 ### Image tag semantics
 
-- `v2.0.1_20260720` identifies the upstream release and the UTC build date.
+- `v2.0.2_20260721` identifies the upstream release and the UTC build date.
 - `latest` (that is, `ghcr.io/thematrixcrop/awesome-answer:latest`) points to the most recently published community image.
 - Use the dated tag for reproducible deployments and rollback.
 - This README does not hardcode an image digest. The same dated tag can be rebuilt on the same day, so its digest can change.
+<!-- END AUTO-GENERATED: release-policy -->
 
 ## Docker Installation Tutorial
 
@@ -57,11 +61,13 @@ This is the direct Docker deployment flow described by the [official Chinese Apa
 ### Start the container
 
 ```bash
+<!-- BEGIN AUTO-GENERATED: docker-image-tag -->
 docker run -d \
   --name awesome-answer \
   -p 9080:80 \
   -v awesome-answer-data:/data \
-  ghcr.io/thematrixcrop/awesome-answer:v2.0.1_20260720
+  ghcr.io/thematrixcrop/awesome-answer:v2.0.2_20260721
+<!-- END AUTO-GENERATED: docker-image-tag -->
 ```
 
 The host-side port can be changed, for example to `-p 19080:80`. The container port remains `80`.
@@ -129,10 +135,12 @@ github.com/apache/answer-plugins/<plugin-name>
 
 ### Temporarily blocked plugins
 
+<!-- BEGIN AUTO-GENERATED: blocked-plugins -->
 | Plugin | Current reason |
 | --- | --- |
-| `connector-wallet` | The frontend build currently fails because a transitive Coinbase Wallet dependency uses import-attributes syntax that the Answer frontend toolchain cannot parse. |
-| `user-center-slack` | The upstream main branch currently fails with `undefined: resty` in `notification.go:113`. |
+| `connector-wallet` | The frontend build fails because a transitive Coinbase Wallet dependency uses import-attributes syntax that Answer's frontend toolchain cannot parse. Remove this entry after the dependency is compatible with the toolchain. |
+| `user-center-slack` | The upstream main branch currently fails with undefined: resty in notification.go:113. Remove this entry after the plugin builds successfully. |
+<!-- END AUTO-GENERATED: blocked-plugins -->
 
 The plugin source is the upstream [`apache/answer-plugins` descriptor](https://raw.githubusercontent.com/apache/answer-plugins/main/plugins_desc.json). See the [Apache Answer plugin documentation](https://answer.apache.org/zh-CN/docs/plugins/) and the [Apache Answer plugin repository](https://github.com/apache/answer-plugins) for upstream context.
 

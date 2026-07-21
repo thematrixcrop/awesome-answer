@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "render:dockerfile": "node scripts/render-dockerfile.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "update:readme": "node scripts/update-readme.mjs"
   },
   "keywords": [],
   "author": "",

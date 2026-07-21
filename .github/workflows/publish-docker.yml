@@ -19,7 +19,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Resolve upstream Answer release
         id: answer
@@ -262,3 +262,57 @@ jobs:
           set -euo pipefail
           test -n "${DIGEST}"
           docker buildx imagetools inspect "${IMAGE}@${DIGEST}"
+
+      - name: Resolve published image metadata
+        id: published
+        shell: bash
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+
+          labels="$(docker buildx imagetools inspect "${IMAGE}:latest" --format '{{json .Image.Config.Labels}}')"
+          answer_tag="$(jq -er '."io.awesome-answer.upstream.answer-tag" | select(test("^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"))' <<< "${labels}")"
+          image_tag="$(jq -er '."org.opencontainers.image.version" | select(test("^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)_[0-9]{8}$"))' <<< "${labels}")"
+          manifest_sha256="$(jq -er '."io.awesome-answer.plugins.manifest-sha256" | select(test("^[a-f0-9]{64}$"))' <<< "${labels}")"
+          blacklist_sha256="$(jq -er '."io.awesome-answer.plugins.blacklist-sha256" | select(test("^[a-f0-9]{64}$"))' <<< "${labels}")"
+          plugin_count="$(jq -er '."io.awesome-answer.plugins.count" | tonumber | select(. > 0)' <<< "${labels}")"
+
+          {
+            echo "answer_tag=${answer_tag}"
+            echo "image_tag=${image_tag}"
+            echo "manifest_sha256=${manifest_sha256}"
+            echo "blacklist_sha256=${blacklist_sha256}"
+            echo "plugin_count=${plugin_count}"
+            echo "platform=linux/amd64"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Update README snapshot
+        run: |
+          npm run update:readme -- \
+            --answer-tag "${{ steps.published.outputs.answer_tag }}" \
+            --image-tag "${{ steps.published.outputs.image_tag }}" \
+            --plugin-count "${{ steps.published.outputs.plugin_count }}" \
+            --manifest-sha256 "${{ steps.published.outputs.manifest_sha256 }}" \
+            --blacklist-sha256 "${{ steps.published.outputs.blacklist_sha256 }}" \
+            --platform "${{ steps.published.outputs.platform }}"
+
+      - name: Commit and push README snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- README.md; then
+            echo "README snapshot is already current."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git rebase origin/main
+          git diff --check
+          git add README.md
+          git diff --cached --check
+          git commit -m "docs(readme): update published image snapshot"
+          git push origin HEAD:main
